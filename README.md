@@ -4,7 +4,7 @@
 - [x] An example crawler for ads.txt files given a list of URLs or domains etc and saves them to a Mysql DB table.
 
 
-- [x] Load the db.schema.sql into a mysql db
+- [x] Load the db.schema.sql into a mysql db (DBNAME: adstxtcrawler)
 
 
 
