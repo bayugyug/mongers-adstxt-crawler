@@ -31,17 +31,18 @@ Usage: mongers-adstxt-crawler [options]
 
 ### Warnings
 
-This is an example prototype crawler and would be suitable only for a very modest production usage.
+This is an example only crawler.
 
 ## Compile
 
 - [x] In order to produce the binary
 
+- [x] You need to have a golang compiler installed
 
 ``` sh
 
 
-    cd mongers-adstxt-crawler && go build
+    wget  https://github.com/bayugyug/mongers-adstxt-crawler/archive/master.zip && unzip master.zip && cd mongers-adstxt-crawler && go build
 
 
 ```
