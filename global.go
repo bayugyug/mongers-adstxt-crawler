@@ -30,6 +30,7 @@ const (
 )
 
 var (
+	pBuildTime  = ""
 	adsTxt      chan AdsTxt
 	urlList     chan string
 	sqlDb       *sql.DB
@@ -38,6 +39,16 @@ var (
 	//signal flag
 	pStillRunning     = true
 	adsystemDomainMap map[string]int
+
+	pDbConnectStr = "root:@tcp(127.0.0.1:3306)/adstxtcrawler"
+
+	// envt vars
+	parameters = map[string]*string{
+		"ADSTXTCRAWLER_TARGET": &pTargetFile,
+		"ADSTXTCRAWLER_DBCONN": &pDbConnectStr,
+	}
+	pVersion = "0.01" + "-" + pBuildTime
+	pStats   *StatsHelper
 )
 
 func init() {
@@ -45,6 +56,9 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 
 	adsystemDomainMap = make(map[string]int)
+	pStats = StatsHelperNew()
+
+	getPrametersFromEnv()
 
 	initEnvParams()
 
@@ -133,4 +147,14 @@ Usage: mongers-adstxt-crawler [options]
 	flag.PrintDefaults()
 	fmt.Println()
 	os.Exit(0)
+}
+
+//getPrametersFromEnv parse envt vars
+func getPrametersFromEnv() {
+	for k, v := range parameters {
+		if os.Getenv(k) != "" {
+			*v = os.Getenv(k)
+		}
+	}
+
 }

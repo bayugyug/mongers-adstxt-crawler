@@ -30,15 +30,15 @@ func doIt() {
 
 	//get remote ads.txt
 	uwg.Add(1)
-	go asyncProcRequest(uFlag, uwg)
+	go doProcRequest(uFlag, uwg)
 
 	//parse the params file
 	vwg.Add(1)
-	go asyncParseFile(vFlag, vwg)
+	go doFileParse(vFlag, vwg)
 
 	//insert db rows
 	wwg.Add(1)
-	go asyncProcDbTrans(wFlag, wwg)
+	go doProcDbTrans(wFlag, wwg)
 
 	//wait the last db trans
 	wwg.Wait()
@@ -53,8 +53,8 @@ func doIt() {
 	close(wFlag)
 }
 
-func asyncProcRequest(doneFlg chan bool, wg *sync.WaitGroup) {
-	log.Println("asyncProcRequest: Start")
+func doProcRequest(doneFlg chan bool, wg *sync.WaitGroup) {
+	log.Println("doProcRequest: Start")
 	go func() {
 		for {
 			select {
@@ -67,6 +67,9 @@ func asyncProcRequest(doneFlg chan bool, wg *sync.WaitGroup) {
 		}
 	}()
 
+	sFlag := make(chan bool)
+	swg := new(sync.WaitGroup)
+
 	for remotehost := range urlList {
 		//sig-check
 		if !pStillRunning {
@@ -74,110 +77,27 @@ func asyncProcRequest(doneFlg chan bool, wg *sync.WaitGroup) {
 			doneFlg <- true
 			return
 		}
-		siteDomain := strings.TrimSpace(strings.Replace(
-			strings.Replace(strings.Replace(remotehost, "/ads.txt", "", -1), "https://", "", -1),
-			"http://", "", -1))
-		// Minimum length of a domain name is 1 character, not including extensions.
-		// Domain Name Rules - Nic AG
-		// www.nic.ag/rules.htm
-		if len(siteDomain) < 3 {
-			log.Println("Invalid URL: ", siteDomain)
-			continue
-		}
 
-		//get remote data
-		urlAds, err := asynGetURL(remotehost)
-		if err != nil {
-			log.Println("FAILED proc: ", remotehost, err)
-			continue
-		}
-		if strings.Contains(urlAds, "<html") || strings.Contains(urlAds, "<body") || strings.Contains(urlAds, "<div") || strings.Contains(urlAds, "<a ") {
-			log.Println("Ignoring not a valid txt file format: ", remotehost)
-			continue
-		}
-		log.Println("SUCCESS proc: ", remotehost)
-		adLines := strings.Split(urlAds, "\n")
-		for _, ad := range adLines {
-			ad = strings.TrimSpace(ad)
-			if strings.HasPrefix(ad, "#") {
-				//ignore comment
-				continue
-			}
-			//check if have comments
-			crows := strings.Split(ad, "#")
-			comments := ""
-			if len(crows) > 1 && len(crows[1]) > 0 {
-				comments = strings.TrimSpace(crows[1])
-				ad = crows[0]
-			}
-
-			//check sep
-			sep := " "
-			if strings.Contains(ad, ",") {
-				sep = ","
-			} else if strings.Contains(ad, "\t") {
-				sep = "\t"
-			}
-			//break it into pieces
-			recrows := strings.Split(ad, sep)
-
-			exchangeHost := ""
-			sellerAccountID := ""
-			accountType := ""
-			tagID := ""
-
-			//must be 3 fields
-			if len(recrows) < 3 {
-				continue
-			}
-
-			if len(recrows) >= 3 {
-				exchangeHost = strings.TrimSpace(strings.ToLower(recrows[0]))
-				sellerAccountID = strings.TrimSpace(strings.ToLower(recrows[1]))
-				accountType = strings.TrimSpace(strings.ToLower(recrows[2]))
-			}
-
-			if len(recrows) >= 4 {
-				tagID = strings.TrimSpace(strings.ToLower(recrows[3]))
-			}
-
-			//sanity check
-			if len(exchangeHost) < 3 {
-				log.Println("Invalid exchangeHost: ", recrows, siteDomain)
-				continue
-			}
-			//could be single digit integers
-			if len(sellerAccountID) < 1 {
-				log.Println("Invalid sellerAccountID: ", recrows, siteDomain)
-				continue
-			}
-			//ads.txt supports 'DIRECT' and 'RESELLER'
-			if len(accountType) < 6 {
-				log.Println("Invalid accountType: ", recrows, siteDomain)
-				continue
-			}
-
-			//save to channel
-			adsTxt <- AdsTxt{
-				SiteDomain:      siteDomain,
-				ExchangeDomain:  exchangeHost,
-				SellerAccountID: sellerAccountID,
-				AccountType:     accountType,
-				TagID:           tagID,
-				EntryComment:    comments,
-			}
-		}
+		swg.Add(1)
+		go doMultiProcRows(sFlag, swg, remotehost)
 		//process the url here
 		runtime.Gosched()
 	}
+
+	//wait the parsefile
+	swg.Wait()
+
+	//free up flags
+	close(sFlag)
+
 	close(adsTxt)
 	//send signal -> DONE
 	doneFlg <- true
-	log.Println("asyncProcRequest: Done")
+	log.Println("doProcRequest: Done")
 }
 
-func asyncParseFile(doneFlg chan bool, wg *sync.WaitGroup) {
-	log.Println("asyncParseFile: Start")
+func doFileParse(doneFlg chan bool, wg *sync.WaitGroup) {
+	log.Println("doFileParse: Start")
 	go func() {
 		for {
 			select {
@@ -194,7 +114,7 @@ func asyncParseFile(doneFlg chan bool, wg *sync.WaitGroup) {
 	fh, err := os.Open(pTargetFile)
 	if err != nil {
 		pStillRunning = false
-		log.Println("asyncParseFile failed:", err)
+		log.Println("doFileParse failed:", err)
 		doneFlg <- true
 		return
 	}
@@ -210,13 +130,13 @@ func asyncParseFile(doneFlg chan bool, wg *sync.WaitGroup) {
 		}
 
 		if !govalidator.IsURL(line) {
-			log.Println("asyncParseFile ignore invalid URL:", line)
+			log.Println("doFileParse ignore invalid URL:", line)
 			continue
 		}
 
 		u, err := url.Parse(line)
 		if err != nil {
-			log.Println("asyncParseFile ignore invalid URL format:", err)
+			log.Println("doFileParse ignore invalid URL format:", err)
 			continue
 
 		}
@@ -226,13 +146,14 @@ func asyncParseFile(doneFlg chan bool, wg *sync.WaitGroup) {
 		}
 		host = strings.TrimSpace(host)
 		if len(host) <= 0 {
-			log.Println("asyncParseFile ignore invalid URL:", host, line)
+			log.Println("doFileParse ignore invalid URL:", host, line)
 			continue
 		}
 		urlList <- u.Scheme + "://" + host + "/ads.txt"
+		pStats.setStats("FILE::PARSE::TOTAL")
 	}
 	if err := scanner.Err(); err != nil {
-		log.Println("asyncParseFile scan failed:", err)
+		log.Println("doFileParse scan failed:", err)
 		pStillRunning = false
 		doneFlg <- true
 		return
@@ -242,10 +163,10 @@ func asyncParseFile(doneFlg chan bool, wg *sync.WaitGroup) {
 
 	//send signal -> DONE
 	doneFlg <- true
-	log.Println("asyncParseFile: Done")
+	log.Println("doFileParse: Done")
 }
 
-func asynGetURL(url string) (string, error) {
+func doGetURL(url string) (string, error) {
 	response := ""
 	nextURL := url
 	client := &http.Client{
@@ -253,12 +174,12 @@ func asynGetURL(url string) (string, error) {
 	}
 	for i := 0; i < 5; i++ {
 		if !govalidator.IsURL(nextURL) {
-			log.Println("asynGetURL: Ignoring the invalid URL>", nextURL)
+			log.Println("doGetURL: Ignoring the invalid URL>", nextURL)
 			continue
 		}
 		resp, err := client.Get(nextURL)
 		if err != nil || resp == nil {
-			log.Println("asynGetURL: failed", err, nextURL)
+			log.Println("doGetURL: failed", err, nextURL)
 			continue
 		}
 		if resp.StatusCode == 200 {
@@ -276,8 +197,8 @@ func asynGetURL(url string) (string, error) {
 	return response, nil
 }
 
-func asyncProcDbTrans(doneFlg chan bool, wg *sync.WaitGroup) {
-	log.Println("asyncProcDbTrans: Start")
+func doProcDbTrans(doneFlg chan bool, wg *sync.WaitGroup) {
+	log.Println("doProcDbTrans: Start")
 	go func() {
 		for {
 			select {
@@ -335,10 +256,134 @@ func asyncProcDbTrans(doneFlg chan bool, wg *sync.WaitGroup) {
 			log.Println("Error in sql: exec>", err)
 			continue
 		}
-		log.Println("Success DB exec >>> ", vAd)
+		pStats.setStats("ADSTXT::DOMAIN::" + strings.ToUpper(vAd.SiteDomain))
+		pStats.setStats("DB::PROCESSED::TOTAL")
 		runtime.Gosched()
 	}
 	//send signal -> DONE
 	doneFlg <- true
-	log.Println("asyncProcDbTrans: Done")
+	log.Println("doProcDbTrans: Done")
+}
+
+func doMultiProcRows(doneFlg chan bool, wg *sync.WaitGroup, remotehost string) {
+
+	log.Println("doMultiProcRows: Start")
+	go func() {
+		for {
+			select {
+			//wait till doneFlag has value ;-)
+			case <-doneFlg:
+				//done already ;-)
+				wg.Done()
+				return
+			}
+		}
+	}()
+
+	siteDomain := strings.TrimSpace(strings.Replace(
+		strings.Replace(strings.Replace(remotehost, "/ads.txt", "", -1), "https://", "", -1),
+		"http://", "", -1))
+	// Minimum length of a domain name is 1 character, not including extensions.
+	// Domain Name Rules - Nic AG
+	// www.nic.ag/rules.htm
+	if len(siteDomain) < 3 {
+		log.Println("Invalid URL: ", siteDomain)
+		//send signal -> DONE
+		doneFlg <- true
+		return
+
+	}
+
+	//get remote data
+	urlAds, err := doGetURL(remotehost)
+	if err != nil {
+		log.Println("FAILED proc: ", remotehost, err)
+		//send signal -> DONE
+		doneFlg <- true
+		return
+
+	}
+	urlAds = strings.TrimSpace(strings.ToLower(urlAds))
+	if strings.Contains(urlAds, "<html") || strings.Contains(urlAds, "<body") || strings.Contains(urlAds, "<div") || strings.Contains(urlAds, "<a ") {
+		log.Println("Ignoring not a valid txt file format: ", remotehost)
+		//send signal -> DONE
+		doneFlg <- true
+		return
+	}
+	log.Println("SUCCESS proc: ", remotehost)
+	adLines := strings.Split(urlAds, "\n")
+	for _, ad := range adLines {
+		ad = strings.TrimSpace(ad)
+		if strings.HasPrefix(ad, "#") {
+			//ignore comment
+			continue
+		}
+		//check if have comments
+		crows := strings.Split(ad, "#")
+		comments := ""
+		if len(crows) > 1 && len(crows[1]) > 0 {
+			comments = strings.TrimSpace(crows[1])
+			ad = crows[0]
+		}
+
+		//check sep
+		sep := " "
+		if strings.Contains(ad, ",") {
+			sep = ","
+		} else if strings.Contains(ad, "\t") {
+			sep = "\t"
+		}
+		//break it into pieces
+		recrows := strings.Split(ad, sep)
+
+		exchangeHost := ""
+		sellerAccountID := ""
+		accountType := ""
+		tagID := ""
+
+		//must be 3 fields
+		if len(recrows) < 3 {
+			continue
+		}
+
+		if len(recrows) >= 3 {
+			exchangeHost = strings.TrimSpace(strings.ToLower(recrows[0]))
+			sellerAccountID = strings.TrimSpace(strings.ToLower(recrows[1]))
+			accountType = strings.TrimSpace(strings.ToLower(recrows[2]))
+		}
+
+		if len(recrows) >= 4 {
+			tagID = strings.TrimSpace(strings.ToLower(recrows[3]))
+		}
+
+		//sanity check
+		if len(exchangeHost) < 3 {
+			log.Println("Invalid exchangeHost: ", recrows, siteDomain)
+			continue
+		}
+		//could be single digit integers
+		if len(sellerAccountID) < 1 {
+			log.Println("Invalid sellerAccountID: ", recrows, siteDomain)
+			continue
+		}
+		//ads.txt supports 'DIRECT' and 'RESELLER'
+		if len(accountType) < 6 {
+			log.Println("Invalid accountType: ", recrows, siteDomain)
+			continue
+		}
+
+		//save to channel
+		adsTxt <- AdsTxt{
+			SiteDomain:      siteDomain,
+			ExchangeDomain:  exchangeHost,
+			SellerAccountID: sellerAccountID,
+			AccountType:     accountType,
+			TagID:           tagID,
+			EntryComment:    comments,
+		}
+	}
+	//send signal -> DONE
+	doneFlg <- true
+	log.Println("doMultiProcRows: Done")
+
 }
